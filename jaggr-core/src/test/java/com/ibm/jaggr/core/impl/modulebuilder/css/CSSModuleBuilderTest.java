@@ -155,10 +155,6 @@ public class CSSModuleBuilderTest extends EasyMock {
 		output = buildCss(new StringResource(css, resuri));
 		Assert.assertEquals("@import \"funny name  with  url(...) inside.css\" .foo{color:black}", output);
 
-		css = "@import url(  funny name ' with  \"embedded  \"  quotes.css  )  .foo { color : black }";
-		output = buildCss(new StringResource(css, resuri));
-		Assert.assertEquals("@import url(funny name ' with  \"embedded  \"  quotes.css) .foo{color:black}", output);
-
 		css = "@import \"funny 'name'  with  url(\"...\") and embedded   quotes inside.css\"   .foo { color : black }";
 		output = buildCss(new StringResource(css, resuri));
 		Assert.assertEquals("@import \"funny 'name'  with  url(\"...\") and embedded   quotes inside.css\" .foo{color:black}", output);
@@ -174,6 +170,15 @@ public class CSSModuleBuilderTest extends EasyMock {
 		css = ".foo:after{content:\"\\a\";white-space:pre}";
 		output = buildCss(new StringResource(css, resuri));
 		Assert.assertEquals(css, output);
+	}
+
+	@Test
+	public void testPrefix() throws Exception {
+		String css, output;
+		URI resuri = testdir.toURI();
+		css = "div { display: flex; }";
+		output = buildCss(new StringResource(css, resuri));
+		Assert.assertEquals("div{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex}", output);
 	}
 
 	@Test

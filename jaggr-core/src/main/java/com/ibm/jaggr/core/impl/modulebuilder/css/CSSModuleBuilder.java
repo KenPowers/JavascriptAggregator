@@ -16,12 +16,7 @@
 
 package com.ibm.jaggr.core.impl.modulebuilder.css;
 
-import com.ibm.jaggr.core.IAggregator;
-import com.ibm.jaggr.core.IAggregatorExtension;
-import com.ibm.jaggr.core.IExtensionInitializer;
-import com.ibm.jaggr.core.IServiceRegistration;
-import com.ibm.jaggr.core.IShutdownListener;
-import com.ibm.jaggr.core.NotFoundException;
+import com.ibm.jaggr.core.*;
 import com.ibm.jaggr.core.cachekeygenerator.AbstractCacheKeyGenerator;
 import com.ibm.jaggr.core.cachekeygenerator.ICacheKeyGenerator;
 import com.ibm.jaggr.core.config.IConfig;
@@ -34,35 +29,24 @@ import com.ibm.jaggr.core.transport.IHttpTransport;
 import com.ibm.jaggr.core.util.CopyUtil;
 import com.ibm.jaggr.core.util.PathUtil;
 import com.ibm.jaggr.core.util.TypeUtil;
-
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.mozilla.javascript.Context;
+import org.mozilla.javascript.Function;
+import org.mozilla.javascript.Scriptable;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.io.StringReader;
-import java.io.StringWriter;
+import javax.servlet.http.HttpServletRequest;
+import java.io.*;
 import java.net.URI;
 import java.net.URLConnection;
 import java.text.MessageFormat;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Hashtable;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import javax.servlet.http.HttpServletRequest;
 
 /**
  * This class optimizes CSS module resources that are loaded by the AMD
@@ -177,6 +161,11 @@ public class CSSModuleBuilder extends TextModuleBuilder implements  IExtensionIn
 		s_inlineableImageTypes.add("image/tiff"); //$NON-NLS-1$
 	};
 
+	public CSSModuleBuilder() {
+		super();
+		initPrefixer();
+	}
+
 	@SuppressWarnings("serial")
 	static private final AbstractCacheKeyGenerator s_cacheKeyGenerator = new AbstractCacheKeyGenerator() {
 		// This is a singleton, so default equals() is sufficient
@@ -217,6 +206,12 @@ public class CSSModuleBuilder extends TextModuleBuilder implements  IExtensionIn
 	private Collection<Pattern> inlinedImageIncludeList = Collections.emptyList();
 	public Collection<Pattern> inlinedImageExcludeList = Collections.emptyList();
 
+	// Rhino variables for AutoPrefixer
+	private Context prefixerContext;
+	private Scriptable prefixerScope;
+	private ByteArrayOutputStream prefixerOut;
+	private Function prefixer;
+
 	/* (non-Javadoc)
 	 * @see com.ibm.jaggr.service.modulebuilder.impl.text.TextModuleBuilder#getContentReader(java.lang.String, com.ibm.jaggr.service.resource.IResource, javax.servlet.http.HttpServletRequest, com.ibm.jaggr.service.module.ICacheKeyGenerator)
 	 */
@@ -245,11 +240,14 @@ public class CSSModuleBuilder extends TextModuleBuilder implements  IExtensionIn
 	 * @throws IOException
 	 */
 	protected Reader processCss(IResource resource, HttpServletRequest request, String css) throws IOException {
-		// whitespace
-		css = minify(css, resource);
-
 		// Inline images
 		css = inlineImageUrls(request, css, resource);
+
+		// AutoPrefix
+		css = prefix(css, resource);
+
+		// whitespace
+		css = minify(css, resource);
 
 		return new StringReader(css);
 	}
@@ -633,6 +631,45 @@ public class CSSModuleBuilder extends TextModuleBuilder implements  IExtensionIn
 		}
 		m.appendTail(buf);
 		return buf.toString();
+	}
+
+	/**
+	 * Runs given CSS through AutoPrefixer.
+	 * @param css
+	 * @param res
+	 * @return The prefixed CSS.
+	 */
+	protected String prefix(String css, IResource res) {
+		Object args[] = {"> 1%", css};
+		Object result = prefixer.call(prefixerContext, prefixerScope, prefixerScope, args);
+		return Context.toString(result);
+	}
+
+	/**
+	 * Initializes Rhino with AutoPrefixer.
+	 */
+	private synchronized void initPrefixer() {
+		String apJsRes = "autoprefixer-core.js";
+		String pJsRes = "prefixer.js";
+		InputStream apJsStream = CSSModuleBuilder.class.getClassLoader().getResourceAsStream(apJsRes);
+		InputStream pJsStream = CSSModuleBuilder.class.getClassLoader().getResourceAsStream(pJsRes);
+		try {
+			prefixerContext = Context.enter();
+			prefixerContext.setOptimizationLevel(-1);
+			prefixerScope = prefixerContext.initStandardObjects();
+			String apJsString = IOUtils.toString(apJsStream);
+			String pJsString = IOUtils.toString(pJsStream);
+			prefixerContext.evaluateString(prefixerScope, "var global = {};", "global", 1, null);
+			prefixerContext.evaluateString(prefixerScope, apJsString, apJsRes, 1, null);
+			prefixerContext.evaluateString(prefixerScope, pJsString, pJsRes, 1, null);
+			prefixer = (Function) prefixerScope.get("prefix", prefixerScope);
+		} catch (Exception e) {
+			e.printStackTrace();
+			throw new IllegalStateException("Could not initialize autoprefixer.", e);
+		} finally {
+			IOUtils.closeQuietly(apJsStream);
+			IOUtils.closeQuietly(pJsStream);
+		}
 	}
 
 	/**
